@@ -27,7 +27,6 @@ This service monitors USDC transactions on Solana using Alchemy webhooks. It pro
    ```
    PORT=3000
    SOLANA_ADDR=your_solana_address_here
-   ALCHEMY_API_KEY=your_alchemy_api_key_here
    ALCHEMY_WEBHOOK_AUTH_TOKEN=your_webhook_auth_token_here
    USDC_TOKEN_ADDRESS=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
    SOLANA_NETWORK=mainnet-beta
