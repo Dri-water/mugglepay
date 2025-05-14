@@ -159,24 +159,24 @@ export const webhookController = {
     const requestId = Math.random().toString(36).substring(7);
     logger.info('Transaction query request received', {
       requestId,
-      txHash: req.params.txHash
+      signature: req.params.txHash
     });
 
     try {
       const { txHash } = req.params;
-      const transfer = tokenService.getTransferByHash(txHash);
+      const transfer = tokenService.getTransferBySignature(txHash);
 
       if (!transfer) {
         logger.info('Transaction not found', {
           requestId,
-          txHash
+          signature: txHash
         });
         return res.status(404).json({ error: 'Transaction not found' });
       }
 
       logger.info('Transaction found', {
         requestId,
-        txHash,
+        signature: txHash,
         transferDetails: {
           amount: transfer.amount,
           timestamp: transfer.timestamp,

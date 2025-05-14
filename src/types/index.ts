@@ -4,7 +4,7 @@ export interface TokenTransfer {
   from: string;
   to: string;
   timestamp: number;
-  transactionHash: string;
+  signature: string;
 }
 
 interface TransactionInstruction {

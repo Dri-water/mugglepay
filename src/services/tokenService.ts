@@ -142,10 +142,10 @@ class TokenService {
           from: accounts[instructions[0].accounts[0]], // Sender is the first account in instruction
           to: accounts[monitoredAddressIndex],
           timestamp: Date.now(), // Current timestamp as transaction timestamp isn't provided
-          transactionHash: transaction.signature
+          signature: transaction.signature
         };
 
-        this.transfers.set(transfer.transactionHash, transfer);
+        this.transfers.set(transfer.signature, transfer);
         logger.info('SOL transfer recorded', {
           requestId,
           transfer,
@@ -205,7 +205,8 @@ class TokenService {
 
       logger.info('Webhook processing completed', {
         requestId,
-        transactionCount: payload.event.transaction.length
+        transactionCount: payload.event.transaction.length,
+        transactionHashes: payload.event.transaction.map(tx => tx.signature)
       });
     } catch (error) {
       logger.error('Error handling webhook', {
@@ -221,17 +222,17 @@ class TokenService {
     }
   }
 
-  public getTransferByHash(txHash: string): TokenTransfer | undefined {
+  public getTransferBySignature(signature: string): TokenTransfer | undefined {
     try {
-      if (typeof txHash !== 'string') {
-        throw new Error('Transaction hash must be a string');
+      if (typeof signature !== 'string') {
+        throw new Error('Transaction signature must be a string');
       }
 
-      const transfer = this.transfers.get(txHash);
+      const transfer = this.transfers.get(signature);
       if (transfer) {
-        logger.info('Transfer found', { txHash, transfer });
+        logger.info('Transfer found', { signature, transfer });
       } else {
-        logger.info('Transfer not found', { txHash });
+        logger.info('Transfer not found', { signature });
       }
       return transfer;
     } catch (error) {
@@ -241,7 +242,7 @@ class TokenService {
           message: error.message,
           stack: error.stack
         } : error,
-        txHash
+        signature
       });
       throw error;
     }
