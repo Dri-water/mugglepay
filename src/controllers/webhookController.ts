@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { tokenService } from '../services/tokenService';
 import { config } from '../config/config';
 import winston from 'winston';
+import { verifyAlchemySignature } from '../utils/signatureVerification';
 
 const logger = winston.createLogger({
   level: 'info',
@@ -15,14 +16,36 @@ const logger = winston.createLogger({
   ],
 });
 
+interface ExtendedRequest extends Request {
+  rawBody?: Buffer;
+}
+
 export const webhookController = {
-  handleWebhook: async (req: Request, res: Response) => {
+  handleWebhook: async (req: ExtendedRequest, res: Response) => {
     try {
-      // Verify webhook authentication
-      const authToken = req.headers['x-webhook-auth'];
-      if (authToken !== config.alchemyWebhookAuthToken) {
-        logger.error('Invalid webhook authentication');
-        return res.status(401).json({ error: 'Unauthorized' });
+      // Get the signature from headers
+      const signature = req.headers['x-alchemy-signature'];
+      
+      if (!signature || typeof signature !== 'string') {
+        logger.error('Missing or invalid signature');
+        return res.status(401).json({ error: 'Missing signature' });
+      }
+
+      if (!req.rawBody) {
+        logger.error('Raw body not available');
+        return res.status(500).json({ error: 'Internal server error' });
+      }
+
+      // Verify the signature using raw body
+      const isValid = verifyAlchemySignature(
+        req.rawBody.toString('utf8'),
+        signature,
+        config.alchemyWebhookSigningKey as string
+      );
+
+      if (!isValid) {
+        logger.error('Invalid webhook signature');
+        return res.status(401).json({ error: 'Invalid signature' });
       }
 
       await tokenService.handleWebhook(req.body);

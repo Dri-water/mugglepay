@@ -17,8 +17,13 @@ const logger = winston.createLogger({
 
 const app = express();
 
-// Middleware
-app.use(express.json());
+// Middleware to parse JSON while preserving raw body
+app.use(express.json({
+  verify: (req: any, res, buf) => {
+    // Store raw body for signature verification
+    req.rawBody = buf;
+  }
+}));
 
 // Routes
 app.post('/webhook', webhookController.handleWebhook);
