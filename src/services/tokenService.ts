@@ -1,4 +1,4 @@
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { TokenTransfer, AlchemyWebhookPayload } from '../types';
 import { config } from '../config/config';
 import winston from 'winston';
@@ -49,47 +49,38 @@ class TokenService {
         throw new Error('Payload must be an object');
       }
 
-      const { event } = payload as Partial<AlchemyWebhookPayload>;
+      const typedPayload = payload as Partial<AlchemyWebhookPayload>;
       
-      if (!event || typeof event !== 'object') {
-        throw new Error('Missing or invalid event object');
+      if (!typedPayload.type) {
+        throw new Error('Missing webhook type');
       }
 
-      const requiredFields = ['tokenAddress', 'to', 'from', 'amount', 'hash', 'timestamp'];
-      const missingFields = requiredFields.filter(field => !(field in event));
-
-      if (missingFields.length > 0) {
-        throw new Error(`Missing required fields: ${missingFields.join(', ')}`);
+      if (typedPayload.type !== 'ADDRESS_ACTIVITY') {
+        throw new Error(`Unsupported webhook type: ${typedPayload.type}`);
       }
 
-      // Validate field types
-      if (typeof event.tokenAddress !== 'string') throw new Error('tokenAddress must be a string');
-      if (typeof event.to !== 'string') throw new Error('to address must be a string');
-      if (typeof event.from !== 'string') throw new Error('from address must be a string');
-      if (typeof event.amount !== 'string') throw new Error('amount must be a string');
-      if (typeof event.hash !== 'string') throw new Error('hash must be a string');
-      if (typeof event.timestamp !== 'string') throw new Error('timestamp must be a string');
-
-      // Validate address formats
-      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(event.tokenAddress)) {
-        throw new Error('Invalid token address format');
-      }
-      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(event.to)) {
-        throw new Error('Invalid recipient address format');
-      }
-      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(event.from)) {
-        throw new Error('Invalid sender address format');
+      if (!typedPayload.event?.transaction?.[0]) {
+        throw new Error('Missing transaction data');
       }
 
-      // Validate amount format
-      if (!/^\d*\.?\d*$/.test(event.amount)) {
-        throw new Error('Invalid amount format');
+      const transaction = typedPayload.event.transaction[0];
+      
+      if (!transaction.transaction?.[0]?.message?.[0]) {
+        throw new Error('Invalid transaction structure');
       }
 
-      // Validate timestamp
-      const timestamp = new Date(event.timestamp).getTime();
-      if (isNaN(timestamp)) {
-        throw new Error('Invalid timestamp format');
+      const message = transaction.transaction[0].message[0];
+      
+      if (!message.account_keys || !Array.isArray(message.account_keys)) {
+        throw new Error('Missing or invalid account_keys');
+      }
+
+      if (!message.instructions || !Array.isArray(message.instructions)) {
+        throw new Error('Missing or invalid instructions');
+      }
+
+      if (!transaction.meta?.[0]) {
+        throw new Error('Missing transaction metadata');
       }
     } catch (error) {
       logger.error('Payload validation failed', {
@@ -104,91 +95,118 @@ class TokenService {
     }
   }
 
+  private isMonitoredAddress(address: string): boolean {
+    return address.toLowerCase() === config.solanaAddress.toLowerCase();
+  }
+
+  private processTransaction(transaction: any, requestId: string): void {
+    try {
+      const message = transaction.transaction[0].message[0];
+      const meta = transaction.meta[0];
+      const accounts = message.account_keys;
+      const instructions = message.instructions;
+
+      // Log transaction details for debugging
+      logger.debug('Processing transaction', {
+        requestId,
+        signature: transaction.signature,
+        accounts,
+        instructions,
+        balanceChanges: {
+          pre: meta.pre_balances,
+          post: meta.post_balances
+        }
+      });
+
+      // Find the index of our monitored address
+      const monitoredAddressIndex = accounts.findIndex(this.isMonitoredAddress);
+      if (monitoredAddressIndex === -1) {
+        logger.debug('Monitored address not found in transaction', {
+          requestId,
+          accounts,
+          monitoredAddress: config.solanaAddress
+        });
+        return;
+      }
+
+      // Calculate the balance change for our address
+      const preBalance = meta.pre_balances[monitoredAddressIndex];
+      const postBalance = meta.post_balances[monitoredAddressIndex];
+      const balanceChange = (postBalance - preBalance) / LAMPORTS_PER_SOL;
+
+      // Only process if there's a positive balance change (receiving SOL)
+      if (balanceChange > 0) {
+        const transfer: TokenTransfer = {
+          amount: balanceChange,
+          tokenAddress: 'SOL', // Native SOL transfer
+          from: accounts[instructions[0].accounts[0]], // Sender is the first account in instruction
+          to: accounts[monitoredAddressIndex],
+          timestamp: Date.now(), // Current timestamp as transaction timestamp isn't provided
+          transactionHash: transaction.signature
+        };
+
+        this.transfers.set(transfer.transactionHash, transfer);
+        logger.info('SOL transfer recorded', {
+          requestId,
+          transfer,
+          fee: meta.fee / LAMPORTS_PER_SOL
+        });
+      } else {
+        logger.debug('No positive balance change for monitored address', {
+          requestId,
+          balanceChange,
+          fee: meta.fee / LAMPORTS_PER_SOL
+        });
+      }
+    } catch (error) {
+      logger.error('Error processing transaction', {
+        requestId,
+        error: error instanceof Error ? {
+          name: error.name,
+          message: error.message,
+          stack: error.stack
+        } : error,
+        transaction: transaction.signature
+      });
+      throw error;
+    }
+  }
+
   public async handleWebhook(payload: unknown): Promise<void> {
     const requestId = Math.random().toString(36).substring(7);
     
     try {
       logger.debug('Received webhook payload', {
         requestId,
-        payload,
-        payloadType: typeof payload
+        payloadType: typeof payload,
+        type: (payload as any)?.type
       });
 
       // Validate and type-check the payload
       this.validatePayload(payload);
 
-      // Verify it's a USDC transfer
-      const eventTokenAddress = payload.event.tokenAddress.toLowerCase();
-      const configTokenAddress = config.usdcTokenAddress.toBase58().toLowerCase();
-
-      logger.debug('Comparing token addresses', {
-        requestId,
-        eventTokenAddress,
-        configTokenAddress,
-        matches: eventTokenAddress === configTokenAddress
-      });
-
-      if (eventTokenAddress !== configTokenAddress) {
-        logger.info('Non-USDC transfer ignored', {
-          requestId,
-          receivedToken: eventTokenAddress,
-          expectedToken: configTokenAddress
-        });
-        return;
-      }
-
-      // Verify the recipient is our monitored address
-      const eventRecipient = payload.event.to.toLowerCase();
-      const monitoredAddress = config.solanaAddress.toLowerCase();
-
-      logger.debug('Comparing recipient addresses', {
-        requestId,
-        eventRecipient,
-        monitoredAddress,
-        matches: eventRecipient === monitoredAddress
-      });
-
-      if (eventRecipient !== monitoredAddress) {
-        logger.info('Transfer to different address ignored', {
-          requestId,
-          receivedAddress: eventRecipient,
-          expectedAddress: monitoredAddress
-        });
-        return;
-      }
-
-      try {
-        const transfer: TokenTransfer = {
-          amount: parseFloat(payload.event.amount),
-          tokenAddress: payload.event.tokenAddress,
-          from: payload.event.from,
-          to: payload.event.to,
-          timestamp: new Date(payload.event.timestamp).getTime(),
-          transactionHash: payload.event.hash
-        };
-
-        if (isNaN(transfer.amount)) {
-          throw new Error('Failed to parse amount');
+      // Process each transaction in the webhook
+      for (const transaction of payload.event.transaction) {
+        try {
+          this.processTransaction(transaction, requestId);
+        } catch (error) {
+          logger.error('Error processing transaction in webhook', {
+            requestId,
+            error: error instanceof Error ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack
+            } : error,
+            transactionSignature: transaction.signature
+          });
+          // Continue processing other transactions even if one fails
         }
-
-        if (isNaN(transfer.timestamp)) {
-          throw new Error('Failed to parse timestamp');
-        }
-
-        this.transfers.set(transfer.transactionHash, transfer);
-        logger.info('Transfer recorded', { requestId, transfer });
-      } catch (error) {
-        logger.error('Failed to process transfer', {
-          requestId,
-          error: error instanceof Error ? {
-            name: error.name,
-            message: error.message,
-            stack: error.stack
-          } : error,
-          event: payload.event
-        });
-        throw error;
       }
+
+      logger.info('Webhook processing completed', {
+        requestId,
+        transactionCount: payload.event.transaction.length
+      });
     } catch (error) {
       logger.error('Error handling webhook', {
         requestId,
