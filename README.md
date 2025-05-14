@@ -4,7 +4,7 @@ This service monitors USDC transactions on Solana using Alchemy webhooks. It pro
 
 ## Features
 
-- Monitor USDC transfers to a specific Solana address
+- Monitor USDC transfers TO a specific Solana address
 - Webhook endpoint for Alchemy notifications
 - Query endpoint for transaction details
 - Logging system for tracking transfers
@@ -27,7 +27,7 @@ This service monitors USDC transactions on Solana using Alchemy webhooks. It pro
    ```
    PORT=3000
    SOLANA_ADDR=your_solana_address_here
-   ALCHEMY_WEBHOOK_AUTH_TOKEN=your_webhook_auth_token_here
+   ALCHEMY_WEBHOOK_SIGNING_KEY=your_alchemy_webhook_signing_key
    USDC_TOKEN_ADDRESS=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
    SOLANA_NETWORK=mainnet-beta
    ```
@@ -57,7 +57,7 @@ Receives notifications from Alchemy when USDC transfers occur.
 ```
 GET /transaction/:txHash
 ```
-Retrieves details about a specific transaction.
+Retrieves details about a specific INCOMING transaction only.
 
 ### Health Check
 ```
